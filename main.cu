@@ -1,32 +1,52 @@
 #include <iostream>
 #include <stdint.h>
 #include <string>
+#include <cmath>
 
-#include "murmuda3.h"
+#include "bloom.h"
+
 
 int main() {
+    int num_bits = 2048;
+    int num_keys = 500;
+    int num_test_keys = 5000;
 
-    int num_keys = 1;
-    int num_seeds = 10;
-    int m = 1024;
+    int num_seeds = (int) ( (float)num_bits / num_keys * std::log(2));
+    BloomFilter* bf = new BloomFilter(num_bits, num_seeds);
 
-    std::string* cpp_keys = new std::string("Hello");
-    char const *keys = cpp_keys->c_str();
-    int len = sizeof(keys);
-
-    uint32_t* seeds = new uint32_t[num_seeds];
-    for (int i = 0; i < num_seeds; i++) {
-        seeds[i] = i;
+    int32_t* keys = new int32_t[num_keys];
+    int len = sizeof(keys[0]);
+    for (int i = 0; i < num_keys; i++) {
+        keys[i] = i;
     }
 
-    uint32_t* out = new uint32_t[num_keys * num_seeds];
-
-    MurmurHash3_batch(keys, len, num_keys, seeds, num_seeds, out);
-
-    uint32_t* c_out = new uint32_t[1];
     for (int i = 0; i < num_keys; i++) {
-        for (int j = 0; j < num_seeds; j++) {
-            std::cout << out[j + i * num_seeds] % m << std::endl;
+        bf->add(&keys[i], len);
+    }
+
+
+    for (int i = 0; i < num_keys; i++) {
+        if (!bf->test(&keys[i], len)) {
+            std::cout << "Error for key" << keys[i] << std::endl;
         }
     }
+
+    int32_t* test_keys = new int32_t[num_test_keys];
+    for (int i = 0; i < num_test_keys; i++) {
+        test_keys[i] = i + num_keys;
+    }
+
+    int false_positives = 0;
+    for (int i = 0; i < num_test_keys; i++) {
+        if (bf->test(&test_keys[i], len)) {
+            false_positives++;
+        }
+    }
+    float rate = ((float) false_positives) / num_test_keys;
+
+    float expo = (((float) num_seeds) * num_keys) / num_bits;
+    float base = 1 - std::exp(-1 * expo);
+    float expected = std::pow(base, num_seeds);
+    std::cout << "False positive: " << rate << std::endl;
+    std::cout << "Expected: " << expected << std::endl;
 }
