@@ -7,12 +7,13 @@
 
 
 int main() {
-    int num_bits = 2048;
-    int num_keys = 500;
+    int num_bits = 4096;
+    int num_keys = 100;
     int num_test_keys = 5000;
 
     int num_seeds = (int) ( (float)num_bits / num_keys * std::log(2));
     BloomFilter* bf = new BloomFilter(num_bits, num_seeds);
+    std::cout << "Number of hash functions " << num_seeds << std::endl;
 
     int32_t* keys = new int32_t[num_keys];
     int len = sizeof(keys[0]);
@@ -24,6 +25,7 @@ int main() {
         bf->add(&keys[i], len);
     }
 
+    bf->sync();
 
     for (int i = 0; i < num_keys; i++) {
         if (!bf->test(&keys[i], len)) {

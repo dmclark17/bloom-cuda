@@ -4,53 +4,138 @@
 #include "bloom.h"
 #include "murmuda3.h"
 
+__global__
+void cuda_add(uint16_t* cuda_bit_vector, int num_bits, uint32_t* cuda_seeds,
+              int num_seeds, const void* cuda_key, int len) {
+    // For now lets pretend this is just called for one key
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+
+    // Allocate memory on device from kernel for output of hash. This is init
+    // by the decorator
+    extern __shared__ uint32_t out[];
+
+    // Hash them in parallel
+    for (int k = index; k < num_seeds; k+= stride) {
+        _Murmur3_helper(cuda_key, len, cuda_seeds[k], &(out[k]));
+    }
+
+    __syncthreads();
+    if (threadIdx.x == 0) {
+        uint32_t bit_index;
+        for (int i = 0; i < num_seeds; i++) {
+            bit_index = out[i] % num_bits;
+            cuda_bit_vector[bit_index / 16] |= 1 << (bit_index % 16);
+        }
+
+    }
+}
+
+__global__
+void cuda_test(uint16_t* cuda_bit_vector, int num_bits, uint32_t* cuda_seeds,
+               int num_seeds, const void* cuda_key, int len, bool * bool_out) {
+    // For now lets pretend this is just called for one key
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+
+    // Allocate memory on device from kernel for output of hash. This is init
+    // by the decorator
+    extern __shared__ bool test_vals[];
+    uint32_t out, bit_index;
+
+    // Hash them in parallel
+    for (int k = index; k < num_seeds; k+= stride) {
+        _Murmur3_helper(cuda_key, len, cuda_seeds[k], &out);
+        bit_index = out % num_bits;
+        test_vals[k] = (cuda_bit_vector[bit_index / 16] & (1 << (bit_index % 16)));
+    }
+
+    __syncthreads();
+    if (threadIdx.x == 0) {
+        *bool_out = true;
+        for (int i = 0; i < num_seeds; i++) {
+            if (!test_vals[i]) {
+                *bool_out = false;
+                break;
+            }
+        }
+    }
+}
+
 
 BloomFilter::BloomFilter(int n_bits, int n_seeds) {
     num_bits = n_bits;
 
-    int num_int = (num_bits + (sizeof(uint16_t) - 1)) / sizeof(uint16_t);
+    num_int = (num_bits + (sizeof(uint16_t) - 1)) / sizeof(uint16_t);
     bit_vector =  new uint16_t[num_int];
     std::fill(bit_vector, bit_vector+num_int, 0);
+
+    // Allocate the bit vector on the device
+    cudaMalloc(&cuda_bit_vector, num_int * sizeof(bit_vector[0]));
+    cudaMemcpy(cuda_bit_vector, bit_vector, num_int * sizeof(bit_vector[0]),
+               cudaMemcpyHostToDevice);
+
 
     num_seeds = n_seeds;
     seeds = new uint32_t[num_seeds];
     for (int i = 0; i < num_seeds; i++) {
         seeds[i] = i;
     }
+
+    cudaMalloc(&cuda_seeds, num_seeds * sizeof(uint32_t));
+    cudaMemcpy(cuda_seeds, seeds, num_seeds * sizeof(uint32_t),
+               cudaMemcpyHostToDevice);
 }
 
 
 void BloomFilter::add(const void * key, int len) {
-    // Hash the key
-    int num_keys = 1;
-    uint32_t* out = new uint32_t[num_keys * num_seeds];
+    void * cuda_key;
+    cudaMalloc(&cuda_key, len);
+    cudaMemcpy(cuda_key, key, len, cudaMemcpyHostToDevice);
 
-    MurmurHash3_batch(key, len, num_keys, seeds, num_seeds, out);
+    int blockSize = num_seeds;
+    int numBlocks = 1;
 
-    // Add to bit_vector
-    uint32_t index;
-    for (int i = 0; i < num_seeds; i++) {
-        index = out[i] % num_bits;
-        // std::cout << index << std::endl;
-        bit_vector[index / 16] |= 1 << (index % 16);
-    }
+    cuda_add<<<numBlocks,
+               blockSize,
+               num_seeds * sizeof(uint32_t)>>>(cuda_bit_vector, num_bits,
+                                               cuda_seeds, num_seeds,
+                                               cuda_key, len);
+
+    cudaDeviceSynchronize();
+
+    cudaFree(cuda_key);
+}
+
+void BloomFilter::sync() {
+    cudaMemcpy(bit_vector, cuda_bit_vector, num_int * sizeof(bit_vector[0]),
+               cudaMemcpyDeviceToHost);
 }
 
 bool BloomFilter::test(const void * key, int len) {
-    // Hash the key
-    int num_keys = 1;
-    uint32_t* out = new uint32_t[num_keys * num_seeds];
+    bool result;
+    bool * cuda_result;
+    cudaMalloc(&cuda_result, sizeof(bool));
 
-    MurmurHash3_batch(key, len, num_keys, seeds, num_seeds, out);
+    void * cuda_key;
+    cudaMalloc(&cuda_key, len);
+    cudaMemcpy(cuda_key, key, len, cudaMemcpyHostToDevice);
 
-    // Test the bit_vector
-    uint32_t index;
-    bool result = true;
-    for (int i = 0; i < num_seeds; i++) {
-        index = out[i] % num_bits;
-        bool temp = (bit_vector[index / 16] & (1 << (index % 16)));
-        result = result && temp;
-        // std::cout << index << " " << temp << " " << result << std::endl;
-    }
+    int blockSize = num_seeds;
+    int numBlocks = 1;
+
+    cuda_test<<<numBlocks,
+                blockSize,
+                num_seeds * sizeof(uint32_t)>>>(cuda_bit_vector, num_bits,
+                                                cuda_seeds, num_seeds,
+                                                cuda_key, len, cuda_result);
+
+    cudaDeviceSynchronize();
+
+    cudaMemcpy(&result, cuda_result, sizeof(bool), cudaMemcpyDeviceToHost);
+
+    cudaFree(cuda_key);
+    cudaFree(cuda_result);
+
     return result;
 }
