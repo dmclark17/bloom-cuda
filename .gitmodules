@@ -1,0 +1,3 @@
+[submodule "dependencies/murmur-cuda"]
+	path = dependencies/murmur-cuda
+	url = git@github.com:dmclark17/murmur-cuda.git
