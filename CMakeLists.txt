@@ -5,7 +5,7 @@ add_subdirectory(dependencies)
 set(depend_src ${depend_src})
 add_subdirectory(src)
 
-add_executable(main main.cu)
+add_executable(main main.cpp)
 
 target_link_libraries(main bloomlib-cuda murmurlib-cuda)
 target_include_directories(main PUBLIC src)

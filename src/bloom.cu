@@ -5,7 +5,7 @@
 #include "murmuda3.h"
 
 __global__
-void cuda_add(uint16_t* cuda_bit_vector, int num_bits, uint32_t* cuda_seeds,
+void cuda_add(uint32_t* cuda_bit_vector, int num_bits, uint32_t* cuda_seeds,
               int num_seeds, const void* cuda_key, int len) {
     // For now lets pretend this is just called for one key
     int index = blockIdx.x * blockDim.x + threadIdx.x;
@@ -14,25 +14,21 @@ void cuda_add(uint16_t* cuda_bit_vector, int num_bits, uint32_t* cuda_seeds,
     // Allocate memory on device from kernel for output of hash. This is init
     // by the decorator
     extern __shared__ uint32_t out[];
+    uint32_t bit_index;
 
     // Hash them in parallel
     for (int k = index; k < num_seeds; k+= stride) {
         _Murmur3_helper(cuda_key, len, cuda_seeds[k], &(out[k]));
-    }
 
-    __syncthreads();
-    if (threadIdx.x == 0) {
-        uint32_t bit_index;
-        for (int i = 0; i < num_seeds; i++) {
-            bit_index = out[i] % num_bits;
-            cuda_bit_vector[bit_index / 16] |= 1 << (bit_index % 16);
-        }
-
+        // Use cuda atomic functions to guarentee it is flipped
+        bit_index = out[k] % num_bits;
+        atomicOr(&(cuda_bit_vector[bit_index / 32]),
+                 (uint32_t) 1 << (bit_index % 32));
     }
 }
 
 __global__
-void cuda_test(uint16_t* cuda_bit_vector, int num_bits, uint32_t* cuda_seeds,
+void cuda_test(uint32_t* cuda_bit_vector, int num_bits, uint32_t* cuda_seeds,
                int num_seeds, const void* cuda_key, int len, bool * bool_out) {
     // For now lets pretend this is just called for one key
     int index = blockIdx.x * blockDim.x + threadIdx.x;
@@ -47,7 +43,7 @@ void cuda_test(uint16_t* cuda_bit_vector, int num_bits, uint32_t* cuda_seeds,
     for (int k = index; k < num_seeds; k+= stride) {
         _Murmur3_helper(cuda_key, len, cuda_seeds[k], &out);
         bit_index = out % num_bits;
-        test_vals[k] = (cuda_bit_vector[bit_index / 16] & (1 << (bit_index % 16)));
+        test_vals[k] = (cuda_bit_vector[bit_index / 32] & (1 << (bit_index % 32)));
     }
 
     __syncthreads();
@@ -66,8 +62,8 @@ void cuda_test(uint16_t* cuda_bit_vector, int num_bits, uint32_t* cuda_seeds,
 BloomFilter::BloomFilter(int n_bits, int n_seeds) {
     num_bits = n_bits;
 
-    num_int = (num_bits + (sizeof(uint16_t) - 1)) / sizeof(uint16_t);
-    bit_vector =  new uint16_t[num_int];
+    num_int = (num_bits + (sizeof(uint32_t) - 1)) / sizeof(uint32_t);
+    bit_vector =  new uint32_t[num_int];
     std::fill(bit_vector, bit_vector+num_int, 0);
 
     // Allocate the bit vector on the device

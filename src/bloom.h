@@ -6,11 +6,11 @@
 class BloomFilter {
         int num_bits; // Length of bit vector
         int num_int; // Length of array
-        uint16_t* bit_vector;
+        uint32_t* bit_vector;
         int num_seeds; // number of hash functions
         uint32_t * seeds;
 
-        uint16_t* cuda_bit_vector;
+        uint32_t* cuda_bit_vector;
         uint32_t* cuda_seeds;
     public:
         BloomFilter() {}
