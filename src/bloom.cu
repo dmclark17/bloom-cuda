@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <iostream>
+#include <stdio.h>
 
 #include "bloom.h"
 #include "murmuda3.h"
@@ -37,6 +38,7 @@ void cuda_test(uint32_t* cuda_bit_vector, int num_bits, uint32_t* cuda_seeds,
     // Allocate memory on device from kernel for output of hash. This is init
     // by the decorator
     extern __shared__ bool test_vals[];
+    test_vals[index] = true;
     uint32_t out, bit_index;
 
     // Hash them in parallel
@@ -47,14 +49,16 @@ void cuda_test(uint32_t* cuda_bit_vector, int num_bits, uint32_t* cuda_seeds,
     }
 
     __syncthreads();
-    if (threadIdx.x == 0) {
-        *bool_out = true;
-        for (int i = 0; i < num_seeds; i++) {
-            if (!test_vals[i]) {
-                *bool_out = false;
-                break;
-            }
+    for (uint16_t t = blockDim.x / 2; t > 0; t >>= 1) {  // I think this requires
+        // a power of two for the grid dim
+        if (index < t) {
+            test_vals[index] = test_vals[index] && test_vals[index + t];
         }
+        __syncthreads();
+    }
+
+    if (threadIdx.x == 0) {
+        *bool_out = test_vals[index];
     }
 }
 
@@ -117,12 +121,23 @@ bool BloomFilter::test(const void * key, int len) {
     cudaMalloc(&cuda_key, len);
     cudaMemcpy(cuda_key, key, len, cudaMemcpyHostToDevice);
 
-    int blockSize = num_seeds;
+    uint32_t blockSize = num_seeds;
+
+    // Round up to the nearest power of 2
+    blockSize--;
+    blockSize |= blockSize >> 1;
+    blockSize |= blockSize >> 2;
+    blockSize |= blockSize >> 4;
+    blockSize |= blockSize >> 8;
+    blockSize |= blockSize >> 16;
+    blockSize++;
+
+
     int numBlocks = 1;
 
     cuda_test<<<numBlocks,
                 blockSize,
-                num_seeds * sizeof(uint32_t)>>>(cuda_bit_vector, num_bits,
+                blockSize * sizeof(bool)>>>(cuda_bit_vector, num_bits,
                                                 cuda_seeds, num_seeds,
                                                 cuda_key, len, cuda_result);
 
